@@ -1,0 +1,38 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local Python environments
+.venv/
+venv/
+env/
+
+# Local configuration and OS files
+.env
+.env.*
+.DS_Store
+.idea/
+
+# Logs and generated run outputs
+*.log
+logs/
+run_logs/
+outputs/
+runs/
+
+# Training checkpoints and generated models
+checkpoints/
+ckpt/
+models/
+model.ckpt-*
+
+# KaiwuDRL generated/runtime directories
+kaiwudrl/
