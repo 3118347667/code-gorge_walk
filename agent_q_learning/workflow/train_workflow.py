@@ -12,9 +12,14 @@ import math
 import os
 from common_python.utils.common_func import Frame
 from agent_q_learning.feature.definition import sample_process, reward_shaping
+from agent_q_learning.conf.conf import Config
 from tools.train_env_conf_validate import read_usr_conf
 from tools.metrics_utils import get_training_metrics
 from common_python.utils.workflow_disaster_recovery import handle_disaster_recovery
+
+
+def _get_env_score(env_obs):
+    return env_obs["observation"]["env_info"].get("score", 0)
 
 
 def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
@@ -37,7 +42,10 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
             return
 
         env, agent = envs[0], agents[0]
-        EPISODES = 10000
+        EPISODES = Config.EPISODES
+        initial_epsilon = 1.0
+        min_epsilon = 0.05
+        decay_episode = max(1, int(EPISODES * 0.4))
 
         # Initialize monitoring data
         # 初始化监控数据
@@ -78,17 +86,14 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
             # Process initial observation
             # 处理初始观测
             obs_data = agent.observation_process(env_obs)
+            prev_score = _get_env_score(env_obs)
 
             # Episode loop
             # 回合循环
             done = False
-            agent.epsilon = 1.0
+            agent.epsilon = max(min_epsilon, initial_epsilon * math.exp(-episode / decay_episode))
 
             while not done:
-                # Decay exploration rate exponentially
-                # 指数衰减探索率
-                agent.epsilon = max(0.1, agent.epsilon * math.exp(-(1 / EPISODES) * episode))
-
                 # Select action using epsilon-greedy policy
                 # 使用epsilon-greedy策略选择动作
                 act_data = agent.predict(list_obs_data=[obs_data])
@@ -108,6 +113,7 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
                     break
 
                 terminated, truncated = next_env_obs["terminated"], next_env_obs["truncated"]
+                done = terminated or truncated
 
                 # Process next observation
                 # 处理下一个观测
@@ -115,21 +121,24 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
 
                 # Calculate shaped reward
                 # 计算塑形后的奖励
-                reward = reward_shaping(next_env_reward, next_env_obs)
+                curr_score = _get_env_score(next_env_obs)
+                score_delta = curr_score - prev_score
+                prev_score = curr_score
+                reward = reward_shaping(next_env_reward, next_env_obs, score_delta=score_delta)
 
                 # Check if episode is done and update win count
                 # 检查回合是否结束并更新胜利计数
-                done = terminated or truncated
                 if terminated:
                     win_count += 1
 
-                # Create training sample (Q-Learning uses next_state only)
-                # 创建训练样本（Q-Learning只使用next_state）
+                # Create training sample.
+                # 创建训练样本。
                 sample = Frame(
                     state=obs_data.feature,
                     action=current_action,
                     reward=reward,
                     next_state=next_obs_data.feature,
+                    done=done,
                 )
 
                 # Process and learn from sample

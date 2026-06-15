@@ -12,7 +12,7 @@ Author: Tencent AI Arena Authors
 # 关于维度的配置
 class Config:
 
-    STATE_SIZE = 64 * 64 * 1024
+    STATE_SIZE = 64 * 64
     ACTION_SIZE = 4
     LEARNING_RATE = 0.8
     GAMMA = 0.9

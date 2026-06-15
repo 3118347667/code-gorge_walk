@@ -32,6 +32,7 @@ class Algorithm:
                 - action: Action taken in the current state
                 - reward: Reward received after taking the action
                 - next_state: Next state index after taking the action
+                - done: Whether the transition ends the episode
 
         Q-Learning Update Formula:
             Q(s,a) := Q(s,a) + lr * [R(s,a) + gamma * max Q(s',a') - Q(s,a)]
@@ -63,14 +64,20 @@ class Algorithm:
             - max Q(s',a'): 在新状态 s' 下所有可能动作 a' 的最大 Q 值
         """
         sample = list_sample_data[0]
-        state, action, reward, next_state = (
+        state, action, reward, next_state, done = (
             sample["state"],
             sample["action"],
             sample["reward"],
             sample["next_state"],
+            sample.get("done", False),
         )
 
-        delta = reward + self.gamma * np.max(self.Q[next_state, :]) - self.Q[state, action]
+        if done:
+            target = reward
+        else:
+            target = reward + self.gamma * np.max(self.Q[next_state, :])
+
+        delta = target - self.Q[state, action]
 
         self.Q[state, action] += self.learning_rate * delta
 

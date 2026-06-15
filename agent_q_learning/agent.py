@@ -8,6 +8,7 @@ Author: Tencent AI Arena Authors
 """
 
 
+import os
 import numpy as np
 from kaiwudrl.interface.agent import BaseAgent
 from common_python.utils.common_func import create_cls
@@ -124,11 +125,11 @@ class Agent(BaseAgent):
         Process environment observation into feature representation
         将环境观测处理为特征表示
 
-        Note: Combines position and treasure chest status into a single feature.
-        If additional feature processing is performed, corresponding modifications are needed
-        for the Q-table structure and algorithm methods.
-        注意：将位置和宝箱状态组合成单一特征。如进行额外特征处理，则需要对Q表结构
-        和算法方法进行相应的改动。
+        Note: By default, only positional information is used as features. If additional feature
+        processing is performed, corresponding modifications are needed for the Q-table structure
+        and algorithm methods.
+        注意：默认仅使用位置信息作为特征。如进行额外特征处理，则需要对Q表结构
+        和算法方法进行相应修改。
 
         Args:
             env_obs: Environment observation / 环境观测
@@ -139,20 +140,9 @@ class Agent(BaseAgent):
         obs = env_obs["observation"]
         pos = [obs["frame_state"]["hero"]["pos"]["x"], obs["frame_state"]["hero"]["pos"]["z"]]
 
-        # Position feature: encode 2D position as 1D index
-        # 位置特征：将2D位置编码为1D索引
-        pos_feature = int(pos[0] * 64 + pos[1])
-
-        # Treasure chest status: binary encoding of all treasure states
-        # 宝箱状态：所有宝箱状态的二进制编码
-        treasure_status = [0] * 10
-        for organ in obs["frame_state"]["organs"]:
-            if organ["sub_type"] == 1:
-                treasure_status[organ["config_id"]] = int(organ["status"])
-
-        # Combined feature: position + treasure status
-        # 组合特征：位置 + 宝箱状态
-        feature = int(1024 * pos_feature + sum([treasure_status[i] * (2**i) for i in range(10)]))
+        # Position-only state for the no-treasure task.
+        # 无宝箱任务默认仅使用位置状态。
+        feature = int(pos[0] * 64 + pos[1])
 
         return ObsData(feature=feature)
 
@@ -173,18 +163,26 @@ class Agent(BaseAgent):
         # To save the model, it can consist of multiple files,
         # and it is important to ensure that each filename includes the "model.ckpt-id" field.
         # 保存模型, 可以是多个文件, 需要确保每个文件名里包括了model.ckpt-id字段
-        model_file_path = f"{path}/model.ckpt-{str(id)}.npy"
+        if path is None:
+            path = "./model"
+        os.makedirs(path, exist_ok=True)
+        model_file_path = os.path.join(path, f"model.ckpt-{str(id)}.npy")
         np.save(model_file_path, self.algorithm.Q)
-        self.logger.info(f"save model {model_file_path} successfully")
+        if self.logger:
+            self.logger.info(f"save model {model_file_path} successfully")
 
     def load_model(self, path=None, id="1"):
         # When loading the model, you can load multiple files,
         # and it is important to ensure that each filename matches the one used during the save_model process.
         # 加载模型, 可以加载多个文件, 注意每个文件名需要和save_model时保持一致
-        model_file_path = f"{path}/model.ckpt-{str(id)}.npy"
+        if path is None:
+            path = "./model"
+        model_file_path = os.path.join(path, f"model.ckpt-{str(id)}.npy")
         try:
             self.algorithm.Q = np.load(model_file_path)
-            self.logger.info(f"load model {model_file_path} successfully")
+            if self.logger:
+                self.logger.info(f"load model {model_file_path} successfully")
         except FileNotFoundError:
-            self.logger.info(f"File {model_file_path} not found")
-            exit(1)
+            if self.logger:
+                self.logger.info(f"File {model_file_path} not found, skip loading")
+            return
