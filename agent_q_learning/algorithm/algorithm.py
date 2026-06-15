@@ -20,7 +20,7 @@ class Algorithm:
 
         # Reset the Q-table
         # 重置Q表
-        self.Q = np.ones([self.state_size, self.action_size])
+        self.Q = np.ones([self.state_size, self.action_size], dtype=np.float32)
 
     def learn(self, list_sample_data):
         """

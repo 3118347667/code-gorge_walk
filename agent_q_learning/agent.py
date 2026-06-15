@@ -8,6 +8,8 @@ Author: Tencent AI Arena Authors
 """
 
 
+from collections import deque
+import json
 import os
 import numpy as np
 from kaiwudrl.interface.agent import BaseAgent
@@ -20,6 +22,8 @@ ActData = create_cls("ActData", act=None)
 
 
 class Agent(BaseAgent):
+    _transition_graph = None
+
     def __init__(self, agent_type="player", device=None, logger=None, monitor=None) -> None:
         """
         Initialize Q-Learning agent
@@ -63,8 +67,8 @@ class Agent(BaseAgent):
 
     def exploit(self, env_obs):
         """
-        Exploit current policy for evaluation (greedy action selection)
-        利用当前策略进行评估（贪心动作选择）
+        Exploit current policy for evaluation (path planning first)
+        利用当前策略进行评估（优先规划随机宝箱路径）
 
         Args:
             env_obs: Environment observation / 环境观测
@@ -72,6 +76,10 @@ class Agent(BaseAgent):
         Returns:
             Action to take / 要执行的动作
         """
+        planned_action = self._plan_action(env_obs)
+        if planned_action is not None:
+            return planned_action
+
         obs_data = self.observation_process(env_obs)
         state = obs_data.feature
         act_data = ActData(act=int(np.argmax(self.algorithm.Q[state, :])))
@@ -125,11 +133,9 @@ class Agent(BaseAgent):
         Process environment observation into feature representation
         将环境观测处理为特征表示
 
-        Note: By default, only positional information is used as features. If additional feature
-        processing is performed, corresponding modifications are needed for the Q-table structure
-        and algorithm methods.
-        注意：默认仅使用位置信息作为特征。如进行额外特征处理，则需要对Q表结构
-        和算法方法进行相应修改。
+        Note: Combines position and current treasure availability into a single feature. This lets
+        the same position map to different states when random treasure sets are generated.
+        注意：将位置和当前可收集宝箱状态组合成单一特征，以支持随机宝箱配置。
 
         Args:
             env_obs: Environment observation / 环境观测
@@ -138,13 +144,109 @@ class Agent(BaseAgent):
             ObsData with processed features / 处理后的观测数据
         """
         obs = env_obs["observation"]
-        pos = [obs["frame_state"]["hero"]["pos"]["x"], obs["frame_state"]["hero"]["pos"]["z"]]
+        pos_feature = self._position_feature(obs)
+        treasure_binary = self._treasure_binary(obs)
 
-        # Position-only state for the no-treasure task.
-        # 无宝箱任务默认仅使用位置状态。
-        feature = int(pos[0] * 64 + pos[1])
+        # Combined feature: position + generated/uncollected treasure status.
+        # 组合特征：位置 + 本局已生成且未收集的宝箱状态。
+        feature = int(1024 * pos_feature + treasure_binary)
 
         return ObsData(feature=feature)
+
+    def _position_feature(self, obs):
+        pos = obs["frame_state"]["hero"]["pos"]
+        return int(pos["x"] * 64 + pos["z"])
+
+    def _treasure_binary(self, obs):
+        treasure_status = [0] * 10
+        for organ in obs["frame_state"].get("organs", []):
+            if organ.get("sub_type") == 1:
+                treasure_id = int(organ.get("config_id", -1))
+                if 0 <= treasure_id < 10:
+                    treasure_status[treasure_id] = int(organ.get("status", 0))
+        return sum(treasure_status[i] * (2**i) for i in range(10))
+
+    def _plan_action(self, env_obs):
+        obs = env_obs.get("observation", {})
+        frame_state = obs.get("frame_state", {})
+        organs = frame_state.get("organs", [])
+        if not organs:
+            return None
+
+        current_state = self._position_feature(obs)
+        treasure_targets = []
+        end_target = None
+
+        for organ in organs:
+            pos = organ.get("pos")
+            if not pos:
+                continue
+
+            target_state = int(pos["x"] * 64 + pos["z"])
+            if organ.get("sub_type") == 1 and int(organ.get("status", 0)) == 1:
+                treasure_targets.append(target_state)
+            elif organ.get("sub_type") == 2:
+                end_target = target_state
+
+        # In evaluation, collect the currently generated random treasures first, then finish.
+        # 评估时先收集本局实际生成且未收集的随机宝箱，再前往终点。
+        if treasure_targets:
+            action = self._shortest_path_first_action(current_state, treasure_targets)
+            if action is not None:
+                return action
+
+        if end_target is not None:
+            return self._shortest_path_first_action(current_state, [end_target])
+
+        return None
+
+    def _shortest_path_first_action(self, start_state, target_states):
+        graph = self._load_transition_graph()
+        if not graph:
+            return None
+
+        targets = set(int(state) for state in target_states)
+        if start_state in targets:
+            return None
+
+        visited = {start_state}
+        queue = deque([(start_state, None)])
+
+        while queue:
+            state, first_action = queue.popleft()
+            transitions = graph.get(str(state), {})
+
+            for action in range(self.action_size):
+                step = transitions.get(str(action))
+                if not step:
+                    continue
+
+                next_state = int(step[0])
+                if next_state in visited or next_state == state:
+                    continue
+
+                next_first_action = action if first_action is None else first_action
+                if next_state in targets:
+                    return next_first_action
+
+                visited.add(next_state)
+                queue.append((next_state, next_first_action))
+
+        return None
+
+    def _load_transition_graph(self):
+        if Agent._transition_graph is not None:
+            return Agent._transition_graph
+
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        map_data_path = os.path.join(root_dir, "conf", "map_data", "F_level_1.json")
+        try:
+            with open(map_data_path, "r", encoding="utf-8") as f:
+                Agent._transition_graph = json.load(f)
+        except OSError:
+            Agent._transition_graph = {}
+
+        return Agent._transition_graph
 
     def action_process(self, act_data):
         """
@@ -179,7 +281,16 @@ class Agent(BaseAgent):
             path = "./model"
         model_file_path = os.path.join(path, f"model.ckpt-{str(id)}.npy")
         try:
-            self.algorithm.Q = np.load(model_file_path)
+            loaded_q = np.load(model_file_path)
+            if loaded_q.shape != self.algorithm.Q.shape:
+                if self.logger:
+                    self.logger.info(
+                        f"model shape {loaded_q.shape} does not match current Q-table "
+                        f"{self.algorithm.Q.shape}, skip loading"
+                    )
+                return
+
+            self.algorithm.Q = loaded_q
             if self.logger:
                 self.logger.info(f"load model {model_file_path} successfully")
         except FileNotFoundError:

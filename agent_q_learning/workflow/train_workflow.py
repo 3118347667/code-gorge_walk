@@ -19,7 +19,9 @@ from common_python.utils.workflow_disaster_recovery import handle_disaster_recov
 
 
 def _get_env_score(env_obs):
-    return env_obs["observation"]["env_info"].get("score", 0)
+    obs = env_obs.get("observation", {})
+    game_info = obs.get("game_info") or obs.get("env_info") or {}
+    return game_info.get("score", 0)
 
 
 def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
